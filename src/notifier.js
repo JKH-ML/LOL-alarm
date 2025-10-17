@@ -68,7 +68,7 @@ function formatMatchMessage(teamName, match) {
 }
 
 async function checkAndNotify() {
-  console.log('Checking today\'s matches...');
+  console.log('Checking matches (TEST MODE: all upcoming matches)...');
 
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
@@ -80,11 +80,11 @@ async function checkAndNotify() {
     try {
       console.log(`Checking ${teamInfo.name} matches...`);
 
-      // 오늘 경기 조회
+      // 테스트 모드: 오늘 이후 모든 경기 조회
       const { data: matches, error } = await supabase
         .from(tableName)
         .select('*')
-        .eq('match_date', todayStr)
+        .gte('match_date', todayStr)
         .order('match_datetime', { ascending: true });
 
       if (error) {
@@ -95,9 +95,13 @@ async function checkAndNotify() {
       if (matches && matches.length > 0) {
         console.log(`Found ${matches.length} match(es) for ${teamInfo.name}`);
 
-        // 모든 오늘 경기에 대해 알림
+        // 모든 경기에 대해 알림 (테스트 모드)
         for (const match of matches) {
-          const message = formatMatchMessage(teamInfo.name, match);
+          const matchDate = new Date(match.match_date);
+          const isToday = match.match_date === todayStr;
+          const dayLabel = isToday ? '오늘' : `${match.match_date}`;
+
+          const message = `[테스트] ${dayLabel} ${match.match_time} ${teamInfo.name} VS ${match.opponent} ${match.tournament} 경기가 있습니다.`;
           console.log(`Sending notification: ${message}`);
 
           const success = await sendDiscordNotification(teamInfo.webhook, message);
@@ -113,7 +117,7 @@ async function checkAndNotify() {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
       } else {
-        console.log(`No matches today for ${teamInfo.name}`);
+        console.log(`No upcoming matches for ${teamInfo.name}`);
       }
     } catch (error) {
       console.error(`Error processing ${teamInfo.name}:`, error);

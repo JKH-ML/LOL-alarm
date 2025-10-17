@@ -11,7 +11,7 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-// 한국 팀 목록과 테이블 매핑
+// 팀 목록과 테이블 매핑 (테스트용: 모든 팀)
 const KOREAN_TEAMS = {
   'T1': { name: '티원', table: 't1_matches' },
   '티원': { name: '티원', table: 't1_matches' },
@@ -24,6 +24,9 @@ const KOREAN_TEAMS = {
   'HLE': { name: '한화', table: 'hle_matches' },
   'kt 롤스터': { name: 'kt 롤스터', table: 'kt_matches' }
 };
+
+// 테스트용: 모든 팀을 각 테이블에 저장
+const TEST_MODE = true;
 
 async function scrapeSchedule() {
   console.log('='.repeat(50));
@@ -210,8 +213,12 @@ async function saveToSupabase(matches) {
 
   for (const match of matches) {
     try {
-      // 테이블이 없는 팀은 건너뛰기
-      if (!match.table) {
+      // 테스트 모드: 모든 경기를 세 테이블에 저장
+      const tablesToSave = TEST_MODE
+        ? ['t1_matches', 'geng_matches', 'hle_matches']
+        : (match.table ? [match.table] : []);
+
+      if (tablesToSave.length === 0) {
         console.log(`Skipping: ${match.teamKo} vs ${match.opponent} (no table)`);
         continue;
       }
@@ -234,15 +241,18 @@ async function saveToSupabase(matches) {
 
       console.log(`Saving: ${match.teamKo} vs ${match.opponent} on ${match.date} ${match.time}`);
 
-      const { error } = await supabase
-        .from(match.table)
-        .upsert(matchData, { onConflict: 'match_id' });
+      // 각 테이블에 저장
+      for (const table of tablesToSave) {
+        const { error } = await supabase
+          .from(table)
+          .upsert(matchData, { onConflict: 'match_id' });
 
-      if (error) {
-        console.error(`  ❌ Error: ${error.message}`);
-      } else {
-        console.log(`  ✅ Saved`);
-        savedCount++;
+        if (error) {
+          console.error(`  ❌ Error in ${table}: ${error.message}`);
+        } else {
+          console.log(`  ✅ Saved to ${table}`);
+          savedCount++;
+        }
       }
     } catch (e) {
       console.error(`Error saving match: ${e.message}`);
