@@ -7,6 +7,7 @@
   "scripts": {
     "scrape": "node src/scraper.js",
     "notify": "node src/notifier.js",
+    "clear-db": "node src/clear-db.js",
     "test": "node src/scraper.js"
   },
   "keywords": [

@@ -1,6 +1,9 @@
 import { chromium } from 'playwright';
 import { createClient } from '@supabase/supabase-js';
-import { writeFileSync } from 'fs';
+import dotenv from 'dotenv';
+
+// .env 파일 로드
+dotenv.config();
 
 // Supabase 클라이언트 초기화
 const supabase = createClient(
@@ -11,93 +14,136 @@ const supabase = createClient(
 // 한국 팀 목록과 테이블 매핑
 const KOREAN_TEAMS = {
   'T1': { name: '티원', table: 't1_matches' },
+  '티원': { name: '티원', table: 't1_matches' },
   'Gen.G': { name: '젠지', table: 'geng_matches' },
-  'GenG': { name: '젠지', table: 'geng_matches' },
+  '젠지': { name: '젠지', table: 'geng_matches' },
+  'GEN': { name: '젠지', table: 'geng_matches' },
   'Hanwha Life Esports': { name: '한화', table: 'hle_matches' },
-  'HLE': { name: '한화', table: 'hle_matches' }
+  '한화생명': { name: '한화', table: 'hle_matches' },
+  '한화생명e스포츠': { name: '한화', table: 'hle_matches' },
+  'HLE': { name: '한화', table: 'hle_matches' },
+  'kt 롤스터': { name: 'kt 롤스터', table: 'kt_matches' }
 };
 
 async function scrapeSchedule() {
-  console.log('Starting LOL esports schedule scraper...');
-  console.log('Supabase URL:', process.env.SUPABASE_URL);
+  console.log('='.repeat(50));
+  console.log('Starting LOL esports schedule scraper (Naver)...');
+  console.log('='.repeat(50));
 
-  const browser = await chromium.launch({
-    headless: true
-  });
+  const browser = await chromium.launch({ headless: true });
 
   try {
-    const context = await browser.newContext({
-      locale: 'ko-KR',
-      timezoneId: 'Asia/Seoul'
-    });
+    const page = await browser.newPage();
 
-    const page = await context.newPage();
+    // 오늘부터 7일간의 경기 수집
+    const matches = [];
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
 
-    // API 응답 캡처
-    const apiResponses = [];
+    // 메인 스케줄 페이지로 이동
+    const url = `https://game.naver.com/esports/League_of_Legends/schedule/world_championship`;
+    console.log(`\nScraping from ${url}...`);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForTimeout(5000);
 
-    page.on('response', async (response) => {
-      const url = response.url();
+    // 모든 날짜 카드에서 경기 수집
+    const allMatches = await page.evaluate((koreanTeams) => {
+      const results = [];
+      const dateCards = document.querySelectorAll('.card_item__3Covz');
 
-      // lolesports API 호출 감지
-      if (url.includes('api.lolesports.com') || url.includes('esports-api')) {
-        console.log('API detected:', url);
+      dateCards.forEach(card => {
+        // 날짜 추출
+        const dateElement = card.querySelector('.card_date__1kdC3');
+        if (!dateElement) return;
 
-        try {
-          const contentType = response.headers()['content-type'];
-          if (contentType && contentType.includes('application/json')) {
-            const data = await response.json();
-            apiResponses.push({ url, data });
+        const dateText = dateElement.textContent.trim();
+        // "10월 17일 (금)" 형식에서 월과 일 추출
+        const dateMatch = dateText.match(/(\d+)월\s*(\d+)일/);
+        if (!dateMatch) return;
+
+        const month = dateMatch[1].padStart(2, '0');
+        const day = dateMatch[2].padStart(2, '0');
+        const dateStr = `2025-${month}-${day}`;
+
+        // 이 날짜의 모든 경기
+        const items = card.querySelectorAll('li.row_item__dbJjy');
+
+        items.forEach(item => {
+          try {
+            // 시간 추출
+            const timeElement = item.querySelector('.row_time__28bwr');
+            if (!timeElement) return;
+            const time = timeElement.textContent.trim();
+
+            // 대회명 추출
+            const titleElement = item.querySelector('.row_title__1sdwN');
+            const tournament = titleElement ? titleElement.textContent.trim() : 'Unknown';
+
+            // 홈팀
+            const homeNameElement = item.querySelector('.row_home__zbX5s .row_name__IDFHz');
+            if (!homeNameElement) return;
+            const homeName = homeNameElement.textContent.trim();
+
+            // 원정팀
+            const awayNameElement = item.querySelector('.row_away__3zJEV .row_name__IDFHz');
+            if (!awayNameElement) return;
+            const awayName = awayNameElement.textContent.trim();
+
+            // TBD 경기는 건너뛰지 않고 수집 (나중에 업데이트될 수 있음)
+            // 하지만 한국 팀이 나올 때만 테이블 할당
+            results.push({
+              team: homeName,
+              teamKo: koreanTeams[homeName]?.name || homeName,
+              table: koreanTeams[homeName]?.table || null,
+              opponent: awayName,
+              time: time,
+              tournament: tournament,
+              date: dateStr
+            });
+
+            results.push({
+              team: awayName,
+              teamKo: koreanTeams[awayName]?.name || awayName,
+              table: koreanTeams[awayName]?.table || null,
+              opponent: homeName,
+              time: time,
+              tournament: tournament,
+              date: dateStr
+            });
+          } catch (e) {
+            // 무시
           }
-        } catch (e) {
-          console.log('Could not parse response:', e.message);
-        }
-      }
-    });
-
-    const LOLESPORTS_URL = process.env.LOLESPORTS_URL || 'https://lolesports.com/ko-KR/leagues/first_stand,lck,msi,worlds';
-
-    console.log('Navigating to:', LOLESPORTS_URL);
-    await page.goto(LOLESPORTS_URL, {
-      waitUntil: 'networkidle',
-      timeout: 60000
-    });
-
-    // 페이지 로딩 대기
-    await page.waitForTimeout(10000);
-
-    console.log(`Captured ${apiResponses.length} API responses`);
-
-    // API 응답 저장 (디버깅용)
-    if (apiResponses.length > 0) {
-      try {
-        writeFileSync('api-responses.json', JSON.stringify(apiResponses, null, 2));
-        console.log('Saved API responses to api-responses.json');
-      } catch (e) {
-        console.log('Could not save API responses:', e.message);
-      }
-    }
-
-    // 모든 API URL 출력
-    console.log('\nAll captured API URLs:');
-    apiResponses.forEach((resp, idx) => {
-      console.log(`${idx + 1}. ${resp.url}`);
-    });
-
-    // 경기 데이터 파싱
-    const matches = parseMatches(apiResponses);
-    console.log(`\nParsed ${matches.length} matches`);
-
-    if (matches.length > 0) {
-      console.log('\nMatches found:');
-      matches.forEach((m, idx) => {
-        console.log(`${idx + 1}. ${m.teamKo} vs ${m.opponent} - ${m.tournament} (${m.matchDate})`);
+        });
       });
-    }
+
+      return results;
+    }, KOREAN_TEAMS);
+
+    // 매치 ID 생성 및 오늘부터 7일 이내만 필터링
+    const oneWeekLater = new Date(today);
+    oneWeekLater.setDate(today.getDate() + 7);
+
+    allMatches.forEach(m => {
+      const matchDate = new Date(m.date);
+      if (matchDate >= today && matchDate <= oneWeekLater) {
+        // 날짜+시간+대회로 기본 ID 생성 (TBD가 실제 팀으로 바뀌어도 동일하게 유지)
+        // 팀 관점을 구분하기 위해 team 추가
+        const baseId = `${m.date}-${m.time}-${m.tournament}`.replace(/\s/g, '_');
+        m.matchId = `${m.team}-${baseId}`.replace(/\s/g, '_');
+        matches.push(m);
+      }
+    });
+
+    console.log(`\nFiltered matches (today to +7 days):`);
+    matches.forEach(m => {
+      console.log(`  ${m.date} ${m.time} - ${m.teamKo} vs ${m.opponent}`);
+    });
+
+    console.log(`\nTotal matches found: ${matches.length}`);
 
     // Supabase에 저장
     const savedCount = await saveToSupabase(matches);
-    console.log(`\nSaved ${savedCount} matches to Supabase`);
+    console.log(`Saved ${savedCount} matches to Supabase`);
 
     return {
       success: true,
@@ -114,95 +160,6 @@ async function scrapeSchedule() {
   }
 }
 
-function parseMatches(apiResponses) {
-  const matches = [];
-
-  console.log('\n=== Parsing API Responses ===');
-
-  for (let i = 0; i < apiResponses.length; i++) {
-    const response = apiResponses[i];
-    try {
-      console.log(`\nProcessing response ${i + 1}/${apiResponses.length}`);
-      console.log(`URL: ${response.url}`);
-
-      // API 응답 구조 분석
-      const { data } = response;
-
-      // 데이터 구조 출력
-      if (data.data) {
-        console.log('Response structure:', Object.keys(data.data));
-      }
-
-      // 다양한 API 구조 처리
-      if (data.data && data.data.schedule) {
-        // schedule API
-        const events = data.data.schedule.events || [];
-        console.log(`Found ${events.length} events in schedule`);
-
-        for (const event of events) {
-          const extractedMatches = extractMatchFromEvent(event);
-          matches.push(...extractedMatches);
-        }
-      } else if (data.data && Array.isArray(data.data.events)) {
-        // events API
-        console.log(`Found ${data.data.events.length} events`);
-
-        for (const event of data.data.events) {
-          const extractedMatches = extractMatchFromEvent(event);
-          matches.push(...extractedMatches);
-        }
-      } else {
-        console.log('No events found in this response');
-        // 구조 확인을 위해 키 출력
-        console.log('Available keys:', data.data ? Object.keys(data.data) : 'No data.data');
-      }
-    } catch (e) {
-      console.error('Error parsing API response:', e.message);
-      console.error('Stack:', e.stack);
-    }
-  }
-
-  console.log(`\nTotal matches extracted: ${matches.length}`);
-  return matches;
-}
-
-function extractMatchFromEvent(event) {
-  const matches = [];
-
-  try {
-    // 경기 정보 추출
-    const match = event.match || event;
-    const teams = match.teams || [];
-
-    // 한국 팀이 포함된 경기만 처리
-    for (const team of teams) {
-      const teamName = team.name || team.code;
-
-      if (KOREAN_TEAMS[teamName]) {
-        // 상대팀 찾기
-        const opponent = teams.find(t => t.name !== teamName);
-
-        if (opponent) {
-          matches.push({
-            team: teamName,
-            teamKo: KOREAN_TEAMS[teamName].name,
-            table: KOREAN_TEAMS[teamName].table,
-            opponent: opponent.name || opponent.code,
-            tournament: event.league?.name || event.tournament?.name || 'Unknown',
-            league: event.league?.slug || '',
-            matchDate: event.startTime || event.date,
-            matchId: event.id || `${teamName}-${event.startTime}`
-          });
-        }
-      }
-    }
-  } catch (e) {
-    console.error('Error extracting match:', e.message);
-  }
-
-  return matches;
-}
-
 async function saveToSupabase(matches) {
   let savedCount = 0;
 
@@ -213,67 +170,82 @@ async function saveToSupabase(matches) {
     return 0;
   }
 
+  // 각 테이블별로 TBD 엔트리 정리
+  const tablesToClean = new Set(matches.filter(m => m.table).map(m => m.table));
+  for (const table of tablesToClean) {
+    try {
+      const { data: tbdMatches, error: fetchError } = await supabase
+        .from(table)
+        .select('match_id, opponent')
+        .or('opponent.eq.TBD,opponent.ilike.%TBD%');
+
+      if (!fetchError && tbdMatches && tbdMatches.length > 0) {
+        console.log(`Found ${tbdMatches.length} TBD entries in ${table}`);
+
+        // 현재 스크래핑된 데이터에서 동일한 날짜/시간/대회의 실제 매치가 있는지 확인
+        for (const tbdMatch of tbdMatches) {
+          const shouldDelete = matches.some(m => {
+            if (!m.table || m.table !== table) return false;
+            // 같은 날짜/시간/대회에 TBD가 아닌 실제 매치가 있으면 삭제
+            const baseId = `${m.date}-${m.time}-${m.tournament}`.replace(/\s/g, '_');
+            return tbdMatch.match_id.includes(baseId) && m.opponent !== 'TBD' && !m.opponent.includes('TBD');
+          });
+
+          if (shouldDelete) {
+            const { error: deleteError } = await supabase
+              .from(table)
+              .delete()
+              .eq('match_id', tbdMatch.match_id);
+
+            if (!deleteError) {
+              console.log(`  🗑️ Cleaned up TBD entry: ${tbdMatch.match_id}`);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`Error cleaning TBD entries from ${table}:`, e.message);
+    }
+  }
+
   for (const match of matches) {
     try {
-      const matchDate = new Date(match.matchDate);
-
-      // 날짜 유효성 확인
-      if (isNaN(matchDate.getTime())) {
-        console.log(`Invalid date for match: ${match.matchId}`);
+      // 테이블이 없는 팀은 건너뛰기
+      if (!match.table) {
+        console.log(`Skipping: ${match.teamKo} vs ${match.opponent} (no table)`);
         continue;
       }
 
-      // 오늘부터 1주일 이내 경기만 저장
-      const today = new Date();
-      today.setHours(0, 0, 0, 0); // 오늘 0시로 설정
-
-      const oneWeekLater = new Date();
-      oneWeekLater.setDate(today.getDate() + 7);
-
-      console.log(`\nChecking match: ${match.teamKo} vs ${match.opponent}`);
-      console.log(`Match date: ${matchDate.toISOString()}`);
-      console.log(`Today: ${today.toISOString()}`);
-      console.log(`One week later: ${oneWeekLater.toISOString()}`);
-
-      if (matchDate < today) {
-        console.log('  ⏭️  Skipped: Match is in the past');
-        continue;
-      }
-
-      if (matchDate > oneWeekLater) {
-        console.log('  ⏭️  Skipped: Match is more than 1 week away');
-        continue;
-      }
+      // 시간 파싱 (HH:MM 형식)
+      const [hour, minute] = match.time.split(':').map(Number);
+      const matchDate = new Date(match.date);
+      matchDate.setHours(hour, minute, 0, 0);
 
       const matchData = {
-        match_date: matchDate.toISOString().split('T')[0],
-        match_time: matchDate.toTimeString().split(' ')[0],
+        match_date: match.date,
+        match_time: match.time,
         match_datetime: matchDate.toISOString(),
         opponent: match.opponent,
         tournament: match.tournament,
-        league: match.league,
+        league: match.tournament,
         match_id: match.matchId,
         updated_at: new Date().toISOString()
       };
 
-      console.log(`  Saving to table: ${match.table}`);
-      console.log(`  Data:`, JSON.stringify(matchData, null, 2));
+      console.log(`Saving: ${match.teamKo} vs ${match.opponent} on ${match.date} ${match.time}`);
 
-      // upsert (insert or update)
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from(match.table)
         .upsert(matchData, { onConflict: 'match_id' });
 
       if (error) {
-        console.error(`  ❌ Error saving to ${match.table}:`, error.message);
-        console.error(`  Error details:`, JSON.stringify(error, null, 2));
+        console.error(`  ❌ Error: ${error.message}`);
       } else {
-        console.log(`  ✅ Saved match: ${match.teamKo} vs ${match.opponent} on ${matchData.match_date}`);
+        console.log(`  ✅ Saved`);
         savedCount++;
       }
     } catch (e) {
-      console.error('Error saving match:', e.message);
-      console.error('Stack:', e.stack);
+      console.error(`Error saving match: ${e.message}`);
     }
   }
 
@@ -281,17 +253,15 @@ async function saveToSupabase(matches) {
 }
 
 // 메인 실행
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
-  scrapeSchedule()
-    .then(result => {
-      console.log('\n=== Scraping Result ===');
-      console.log(JSON.stringify(result, null, 2));
-      process.exit(0);
-    })
-    .catch(error => {
-      console.error('Fatal error:', error);
-      process.exit(1);
-    });
-}
+scrapeSchedule()
+  .then(result => {
+    console.log('\n=== Scraping Result ===');
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(0);
+  })
+  .catch(error => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
 
 export { scrapeSchedule };
