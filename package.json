@@ -1,0 +1,28 @@
+{
+  "name": "lol-alarm",
+  "version": "1.0.0",
+  "description": "LOL esports schedule scraper and Discord notification system",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "scrape": "node src/scraper.js",
+    "notify": "node src/notifier.js",
+    "test": "node src/scraper.js"
+  },
+  "keywords": [
+    "lol",
+    "esports",
+    "scraper",
+    "discord"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "axios": "^1.6.5",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2",
+    "playwright": "^1.40.1"
+  }
+}

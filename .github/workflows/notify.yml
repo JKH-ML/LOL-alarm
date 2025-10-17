@@ -1,0 +1,35 @@
+name: Send Discord Notifications
+
+on:
+  # 수동 실행 가능
+  workflow_dispatch:
+
+  # 스케줄: 매일 오전 9시 (한국 시간)
+  # 한국 시간 9시 = UTC 0시
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Send notifications
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          T1_WEBHOOK_URL: ${{ secrets.T1_WEBHOOK_URL }}
+          GENG_WEBHOOK_URL: ${{ secrets.GENG_WEBHOOK_URL }}
+          HLE_WEBHOOK_URL: ${{ secrets.HLE_WEBHOOK_URL }}
+        run: npm run notify
